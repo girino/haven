@@ -37,9 +37,6 @@ func refreshTrustNetwork() {
 
 	log.Println("🌐 building web of trust graph")
 	for i := 0; i < len(oneHopNetwork); i += 100 {
-		timeout, cancel := context.WithTimeout(ctx, 4*time.Second)
-		defer cancel()
-
 		end := i + 100
 		if end > len(oneHopNetwork) {
 			end = len(oneHopNetwork)
@@ -49,19 +46,22 @@ func refreshTrustNetwork() {
 			Authors: oneHopNetwork[i:end],
 			Kinds:   []int{nostr.KindFollowList, nostr.KindRelayListMetadata},
 		}}
+		func() {
+			// close context after each "SubManyEose" to free resources early
+			timeout, innerCancel := context.WithTimeout(ctx, 4*time.Second)
+			defer innerCancel()
+			for ev := range pool.SubManyEose(timeout, config.ImportSeedRelays, filters) {
+				for _, contact := range ev.Event.Tags.GetAll([]string{"p"}) {
+					if len(contact) > 1 {
+						pubkeyFollowerCount[contact[1]]++
+					}
+				}
 
-		for ev := range pool.SubManyEose(timeout, config.ImportSeedRelays, filters) {
-			for _, contact := range ev.Event.Tags.GetAll([]string{"p"}) {
-				if len(contact) > 1 {
-					pubkeyFollowerCount[contact[1]]++
+				for _, relay := range ev.Event.Tags.GetAll([]string{"r"}) {
+					appendRelay(relay[1])
 				}
 			}
-
-			for _, relay := range ev.Event.Tags.GetAll([]string{"r"}) {
-				appendRelay(relay[1])
-			}
-
-		}
+		}()
 	}
 	log.Println("🫂 total network size:", len(pubkeyFollowerCount))
 	log.Println("🔗 relays discovered:", len(wotRelays))
