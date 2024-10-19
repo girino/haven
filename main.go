@@ -48,8 +48,10 @@ func main() {
 
 	http.HandleFunc("/", dynamicRelayHandler)
 
-	log.Printf("🔗 listening at http://localhost:3355")
-	http.ListenAndServe("0.0.0.0:3355", nil)
+	addr := fmt.Sprintf("%s:%d", config.RelayBindAddress, config.RelayPort)
+
+	log.Printf("🔗 listening at %s", addr)
+	http.ListenAndServe(addr, nil)
 }
 
 func dynamicRelayHandler(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +142,6 @@ func makeNewRelay(relayType string, w http.ResponseWriter, r *http.Request) *kha
 		})
 
 		allowedKinds := []int{
-			nostr.KindEncryptedDirectMessage,
 			nostr.KindSimpleGroupAddPermission,
 			nostr.KindSimpleGroupAddUser,
 			nostr.KindSimpleGroupAdmins,
@@ -160,6 +161,7 @@ func makeNewRelay(relayType string, w http.ResponseWriter, r *http.Request) *kha
 			nostr.KindSimpleGroupThread,
 			nostr.KindChannelHideMessage,
 			nostr.KindChannelMessage,
+			nostr.KindGiftWrap,
 		}
 
 		chatRelay.RejectEvent = append(chatRelay.RejectEvent, func(ctx context.Context, event *nostr.Event) (bool, string) {
@@ -169,7 +171,7 @@ func makeNewRelay(relayType string, w http.ResponseWriter, r *http.Request) *kha
 				}
 			}
 
-			return true, "only direct messages are allowed in this relay"
+			return true, "only gift wrapped DMs are allowed"
 		})
 
 		mux := chatRelay.Router()
@@ -202,6 +204,10 @@ func makeNewRelay(relayType string, w http.ResponseWriter, r *http.Request) *kha
 		inboxRelay.RejectEvent = append(inboxRelay.RejectEvent, func(ctx context.Context, event *nostr.Event) (bool, string) {
 			if !wotMap[event.PubKey] {
 				return true, "you must be in the web of trust to post to this relay"
+			}
+
+			if event.Kind == nostr.KindEncryptedDirectMessage {
+				return true, "only gift wrapped DMs are supported"
 			}
 
 			for _, tag := range event.Tags.GetAll([]string{"p"}) {
@@ -237,10 +243,6 @@ func makeNewRelay(relayType string, w http.ResponseWriter, r *http.Request) *kha
 		return inboxRelay
 
 	default: // default to outbox
-		outboxRelay.StoreEvent = append(outboxRelay.StoreEvent, outboxDB.SaveEvent, func(ctx context.Context, event *nostr.Event) error {
-			go blast(event)
-			return nil
-		})
 		outboxRelay.QueryEvents = append(outboxRelay.QueryEvents, outboxDB.QueryEvents)
 		outboxRelay.DeleteEvent = append(outboxRelay.DeleteEvent, outboxDB.DeleteEvent)
 
@@ -249,6 +251,11 @@ func makeNewRelay(relayType string, w http.ResponseWriter, r *http.Request) *kha
 				return false, ""
 			}
 			return true, "only notes signed by the owner of this relay are allowed"
+		})
+
+		outboxRelay.StoreEvent = append(outboxRelay.StoreEvent, outboxDB.SaveEvent, func(ctx context.Context, event *nostr.Event) error {
+			go blast(event)
+			return nil
 		})
 
 		mux := outboxRelay.Router()
